@@ -1,10 +1,11 @@
 """
 GSA ERM2 MCP Toolkit
-Exposes three tools:
-  - gsa_erm2_current_weather   : live weather via wttr.in
-  - gsa_erm2_programming_joke  : programming joke via JokeAPI
-  - gsa_erm2_unit_converter    : local unit conversion (temperature, length, weight,
-                                 volume, speed, time)
+Exposes four tools:
+  - gsa_erm2_current_weather    : live weather via wttr.in
+  - gsa_erm2_programming_joke   : programming joke via JokeAPI
+  - gsa_erm2_unit_converter     : local unit conversion (temperature, length, weight,
+                                  volume, speed, time)
+  - gsa_erm2_currency_converter : live currency conversion via open.er-api.com
 """
 
 from __future__ import annotations
@@ -219,6 +220,65 @@ def gsa_erm2_unit_converter(value: float, from_unit: str, to_unit: str) -> dict:
         "output": round(result, 6),
         "to_unit": to_unit,
     }
+
+
+# ---------------------------------------------------------------------------
+# Tool 4 — currency converter (live rates via open.er-api.com, no API key)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def gsa_erm2_currency_converter(
+    amount: float,
+    from_currency: str,
+    to_currency: str,
+) -> dict:
+    """Convert an amount between currencies using live exchange rates.
+
+    Rates are fetched from open.er-api.com (free tier, no API key required).
+    The base currency for the lookup is always USD; all conversions are routed
+    through it, so any pair supported by the API can be converted.
+
+    Args:
+        amount:        The numeric amount to convert.
+        from_currency: ISO 4217 source currency code (e.g. "USD", "EUR", "GBP").
+        to_currency:   ISO 4217 target currency code (e.g. "JPY", "CAD", "INR").
+
+    Returns:
+        dict with keys: amount, from_currency, result, to_currency, rate, last_updated.
+        On failure returns dict with key "error".
+    """
+    from_currency = from_currency.upper().strip()
+    to_currency = to_currency.upper().strip()
+
+    url = f"https://open.er-api.com/v6/latest/{from_currency}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+
+        if data.get("result") == "error":
+            return {"error": data.get("error-type", "Unknown API error")}
+
+        rates = data.get("rates", {})
+        if to_currency not in rates:
+            return {"error": f"Currency not found: {to_currency}"}
+
+        rate = rates[to_currency]
+        return {
+            "amount": amount,
+            "from_currency": from_currency,
+            "result": round(amount * rate, 6),
+            "to_currency": to_currency,
+            "rate": rate,
+            "last_updated": data.get("time_last_update_utc", "unknown"),
+        }
+    except httpx.HTTPStatusError as exc:
+        return {"error": f"HTTP {exc.response.status_code} from open.er-api.com"}
+    except httpx.RequestError as exc:
+        return {"error": f"Network error: {exc}"}
+    except (KeyError, ValueError) as exc:
+        return {"error": f"Unexpected response shape: {exc}"}
 
 
 # ---------------------------------------------------------------------------
